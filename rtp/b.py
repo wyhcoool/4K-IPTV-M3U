@@ -355,10 +355,14 @@ def parse_s_token(detail_html: str) -> str | None:
     return m.group(1) if m else None
 
 
-def fetch_detail_html(p_token: str, session=None) -> str:
+def fetch_detail_data(p_token: str, session=None) -> dict:
+    """IP 详情页原始响应（含 status / html），便于判断站点是否降级。"""
     query = urlencode({"p": p_token, "t": "multicast"})
-    data = signed_get(f"{IPTV_INDEX}?{query}", session=session)
-    return data.get("html", "") or ""
+    return signed_get(f"{IPTV_INDEX}?{query}", session=session)
+
+
+def fetch_detail_html(p_token: str, session=None) -> str:
+    return fetch_detail_data(p_token, session).get("html", "") or ""
 
 
 def parse_channel_lines(channels_html: str) -> list[str]:
@@ -436,7 +440,8 @@ def fetch_channel_lines_by_province(
     if not rows:
         return {}, "list_empty"
 
-    now_dt = datetime.now()
+    # 站点时间是北京时间；GitHub Actions runner 是 UTC，统一用北京时间避免筛选偏差
+    now_dt = beijing_now().replace(tzinfo=None)
 
     def _status_rank(status: str) -> int:
         """站点把不稳定源标成『暂时失效』，但当天更新过的通常仍可播，作为兜底。"""
@@ -466,9 +471,9 @@ def fetch_channel_lines_by_province(
                   and (not require_recent or _recent(r))]
         return sorted(picked, key=_sort_key, reverse=True)[:limit]
 
-    # 每个运营商准备「主选 + 备用」候选：站点偶发不返回频道 token 时自动换下一条源，
-    # 而不是整轮放弃。最多尝试 max_per_carrier + 3 条，请求量依然可控。
-    candidate_limit = max(max_per_carrier + 3, 4)
+    # 站点只对「部分」IP 详情页返回节目列表链接，且会随时变化（云端与本机结果也不同）。
+    # 因此把全部候选源都放进队列逐条尝试；单条偶发降级时再重试一次，直到拿到可用源。
+    candidate_limit = min(len(rows), max(max_per_carrier + 3, 10))
     carrier_queue: dict[str, list[dict]] = {}
     for carrier in CARRIERS:
         pool = _pick(rows, carrier, candidate_limit, require_recent=True)
@@ -499,10 +504,12 @@ def fetch_channel_lines_by_province(
 
     group_to_sources: dict[str, list[list[str]]] = {}
     used: set[str] = set()
+    detail_attempts = 0
+    last_html = ""
     for pool in carrier_queue.values():
         succeeded = 0
-        for picked in pool:
-            if succeeded >= max_per_carrier:
+        for cand_no, picked in enumerate(pool, 1):
+            if succeeded >= max_per_carrier or detail_attempts >= 14:
                 break
             token = picked.get("p_token")
             if not token or token in used:
@@ -510,15 +517,29 @@ def fetch_channel_lines_by_province(
             used.add(token)
             host = picked.get("host", "")
             group_title = normalize_group_title(picked.get("type", ""), province)
-            print(f"[*] [{province}] 尝试源 {succeeded + 1}/{max_per_carrier}: {host} / {group_title}")
-            try:
-                detail_html = fetch_detail_html(token)
-            except Exception as e:
-                print(f"[-] IP 详情获取失败: {e}，换下一条候选源")
-                continue
-            s_token = parse_s_token(detail_html or "")
+            print(f"[*] [{province}] 候选 {cand_no}/{len(pool)}: {host} / {group_title}"
+                  f"（已成功 {succeeded}/{max_per_carrier}）")
+
+            s_token = None
+            for retry in range(2):  # 站点偶发返回不含节目列表的详情页，隔几秒重试一次
+                detail_attempts += 1
+                try:
+                    data = fetch_detail_data(token)
+                except Exception as e:
+                    print(f"[-] IP 详情获取失败: {e}")
+                    break
+                html = data.get("html", "") or ""
+                last_html = html
+                s_token = parse_s_token(html)
+                print(f"    详情响应: status={data.get('status')} html={len(html)}B "
+                      f"含?s={'?s=' in html} s_token={'有' if s_token else '无'}"
+                      f"{'（第2次尝试）' if retry else ''}")
+                if s_token:
+                    break
+                if retry == 0:
+                    time.sleep(3.0)
             if not s_token:
-                print(f"[-] 未找到频道列表 token: {host}，换下一条候选源")
+                print(f"[-] 该源没有频道列表链接: {host}，换下一条候选源")
                 continue
             lines = fetch_channel_lines_by_s(s_token, max_pages=channel_max_pages)
             if not lines:
@@ -528,6 +549,9 @@ def fetch_channel_lines_by_province(
             succeeded += 1
 
     if not group_to_sources:
+        snippet = re.sub(r"\s+", " ", _strip_html(last_html))[:160]
+        print(f"[!] 所有候选源都未返回频道列表。最后一页内容摘要: {snippet or '(空)'}")
+        print("    若持续如此，多为源站对当前出口 IP 做了降级；可稍后重跑或改用本机定时更新。")
         return {}, "channel_lines_empty"
     return group_to_sources, "ok"
 

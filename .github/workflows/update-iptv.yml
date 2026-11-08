@@ -16,7 +16,7 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: 检出仓库
         uses: actions/checkout@v4
@@ -31,6 +31,12 @@ jobs:
       - name: 安装依赖
         run: pip install -r requirements.txt
 
-      - name: 抓取并推送
+      - name: 抓取并推送（失败自动重试一次）
         # 脚本内部完成 git add / commit / push，只操作本仓库，无需任何 Secret / Token
-        run: python rtp/b.py
+        # 源站偶发不返回频道列表，间隔 3 分钟重试一次，避免整次定时任务白跑
+        run: |
+          python rtp/b.py || (
+            echo "[!] 首次抓取失败，等待 3 分钟后重试一次"
+            sleep 180
+            python rtp/b.py
+          )
