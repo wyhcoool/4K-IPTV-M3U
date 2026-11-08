@@ -1,0 +1,36 @@
+name: 每两天更新浙江 IPTV 源
+
+on:
+  schedule:
+    # 每两天 UTC 01:00（北京时间 09:00）执行一次
+    - cron: '0 1 */2 * *'
+  workflow_dispatch:  # 允许在 Actions 页面手动触发
+
+permissions:
+  contents: write     # 脚本需要把生成的文件 commit / push 回仓库
+
+concurrency:
+  group: iptv-update
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: 配置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+
+      - name: 抓取并推送
+        # 脚本内部完成 git add / commit / push，并自动从 GITHUB_REPOSITORY 推断订阅直链
+        run: python rtp/b.py
