@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-浙江 IPTV 组播源抓取 -> 生成 txt/m3u -> 同步到电视 App 固定订阅地址。
+浙江 IPTV 组播源抓取 -> 生成 txt/m3u + 固定聚合订阅文件 -> 推送到本仓库。
 
-电视地址固定为 SUBSCRIBE_URL（my-iptv 仓库的 wyhiptv.m3u），
-脚本通过 GitHub API 跨仓库更新它，同时把分文件推送到本仓库。
+只操作 wyhcoool/4K-IPTV-M3U 这一个仓库，不需要 Token、不跨仓库：
+聚合文件 zj.m3u 每次运行被覆盖，电视 App 订阅地址固定不变。
 
 常用命令：
-    python rtp/b.py                 # 抓取浙江 + 生成文件 + 本仓库 git 推送 + API 更新订阅地址
-    python rtp/b.py --no-push       # 只生成本地文件，不做任何推送
+    python rtp/b.py                 # 抓取浙江 + 生成文件 + git 提交推送（默认）
+    python rtp/b.py --no-push       # 只生成本地文件，不推送
     python rtp/b.py --dry-run       # 只抓取并统计，不改动任何文件、不推送
     python rtp/b.py --delay 4       # 调大请求间隔（秒），被拦截时更稳
 """
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import hmac
 import os
@@ -80,13 +79,13 @@ LIST_MAX_PAGES = 4             # 服务器列表最多翻几页
 CHANNEL_MAX_PAGES = 20         # 频道列表最多翻几页（20*20=400 条，足够覆盖浙江全部频道）
 
 # 4. 输出与本仓库（4K-IPTV-M3U）推送
-AGGREGATE_M3U = "zj.m3u"       # 本仓库聚合文件（备用订阅）
-AGGREGATE_TXT = "zj.txt"
-PUBLISH_FILE = "wyhiptv.m3u"   # 本地同名文件 = 要发布到 my-iptv 仓库的内容
+AGGREGATE_M3U = "zj.m3u"       # 固定聚合订阅文件：电视 App 只填这一个地址
+AGGREGATE_TXT = "zj.txt"       # 同名 txt 版，便于其他播放器使用
 README_FILE = "README.md"
 EPG_URL = "http://epg.51zmt.top:8000/e.xml.gz"
 TVG_LOGO_BASE_URL = "https://gcore.jsdelivr.net/gh/taksssss/tv/icon/"
-PROXY_PREFIX = "https://gh-proxy.org/"
+PROXY_PREFIX = "https://gh-proxy.org/"      # README 表格里的加速前缀
+SUBSCRIBE_PROXY_PREFIX = "https://gh-proxy.com/"  # 电视 App 主地址沿用用户熟悉的加速域名
 DEFAULT_REPO = "wyhcoool/4K-IPTV-M3U"   # 仅当无法从 git remote 推断时使用
 DEFAULT_BRANCH = "main"
 GITHUB_COMMIT_PREFIX = "Auto update"
@@ -96,14 +95,6 @@ TRACKED_PATHS = (
     "rtp/b.py", ".github/workflows", "requirements.txt", ".gitignore",
     "run_update.bat", "register_task.bat",
 )
-
-# 5. 电视 App 固定订阅地址：跨仓库发布到 wyhcoool/my-iptv 的 wyhiptv.m3u
-SUBSCRIBE_URL = "https://gh-proxy.com/https://github.com/wyhcoool/my-iptv/blob/main/wyhiptv.m3u"
-PUBLISH_REPO = "wyhcoool/my-iptv"
-PUBLISH_BRANCH = "main"
-GITHUB_API = "https://api.github.com"
-# Token 读取顺序：环境变量 MY_IPTV_TOKEN / GITHUB_TOKEN -> 项目根 .env（已被 .gitignore 忽略）
-TOKEN_ENV_KEYS = ("MY_IPTV_TOKEN", "GITHUB_TOKEN")
 
 # 明显无用的占位频道，生成聚合文件时跳过
 SKIP_CHANNEL_KEYWORDS = ("百事通画面", "未知节目", "未识别", "测试频道")
@@ -475,48 +466,66 @@ def fetch_channel_lines_by_province(
                   and (not require_recent or _recent(r))]
         return sorted(picked, key=_sort_key, reverse=True)[:limit]
 
-    # 优先取最近更新过的源；若站点时间格式变化导致一条都没有，放宽为只看状态
-    selected: list[dict] = []
-    seen: set[str] = set()
+    # 每个运营商准备「主选 + 备用」候选：站点偶发不返回频道 token 时自动换下一条源，
+    # 而不是整轮放弃。最多尝试 max_per_carrier + 3 条，请求量依然可控。
+    candidate_limit = max(max_per_carrier + 3, 4)
+    carrier_queue: dict[str, list[dict]] = {}
     for carrier in CARRIERS:
-        candidates = _pick(rows, carrier, max_per_carrier, require_recent=True)
-        if not candidates and max_per_carrier > 0:
-            candidates = _pick(rows, carrier, max_per_carrier, require_recent=False)
-        for row in candidates:
-            token = row.get("p_token")
-            if token and token not in seen:
-                seen.add(token)
-                selected.append(row)
+        pool = _pick(rows, carrier, candidate_limit, require_recent=True)
+        if len(pool) < candidate_limit:
+            known = {r.get("p_token") for r in pool}
+            for row in _pick(rows, carrier, candidate_limit, require_recent=False):
+                if row.get("p_token") not in known:
+                    pool.append(row)
+                    known.add(row.get("p_token"))
+        carrier_queue[carrier] = pool[:candidate_limit]
 
-    if not selected:
-        fallback = [r for r in rows if _status_rank(r.get("status", "")) > 0]
-        selected = sorted(fallback, key=_sort_key, reverse=True)[:1]
-    if not selected:
+    total_candidates = sum(len(v) for v in carrier_queue.values())
+    if not total_candidates:  # 站点类型字段没有「电信/移动/联通」时，退化为全局按状态排序
+        carrier_queue["__fallback__"] = sorted(
+            [r for r in rows if _status_rank(r.get("status", "")) > 0],
+            key=_sort_key, reverse=True,
+        )[:candidate_limit]
+        total_candidates = len(carrier_queue["__fallback__"])
+    if not total_candidates:
         return {}, "no_usable_source"
 
-    if any(_status_rank(r.get("status", "")) == 1 for r in selected):
+    if any(_status_rank(r.get("status", "")) == 1
+           for pool in carrier_queue.values() for r in pool):
         print("[!] 站点当前没有『新上线/存活』源，已退用最近更新的『暂时失效』源；"
               "频道地址可能仍可播放，建议在 App 里试播确认。")
-    print(f"[*] [{province}] 选中 {len(selected)} 条源（每运营商最多 {max_per_carrier} 条）")
+    print(f"[*] [{province}] 每运营商最多取 {max_per_carrier} 条源，"
+          f"共 {total_candidates} 条候选（失败自动换下一条）")
 
     group_to_sources: dict[str, list[list[str]]] = {}
-    for idx, picked in enumerate(selected, 1):
-        group_title = normalize_group_title(picked.get("type", ""), province)
-        print(f"[*] [{province}] 提取第 {idx}/{len(selected)} 条源: {picked.get('host', '')} / {group_title}")
-        try:
-            detail_html = fetch_detail_html(picked.get("p_token", ""))
-        except Exception as e:
-            print(f"[-] IP 详情获取失败: {e}")
-            continue
-        if not detail_html:
-            continue
-        s_token = parse_s_token(detail_html)
-        if not s_token:
-            print(f"[-] 未找到频道列表 token: {picked.get('host', '')}")
-            continue
-        lines = fetch_channel_lines_by_s(s_token, max_pages=channel_max_pages)
-        if lines:
+    used: set[str] = set()
+    for pool in carrier_queue.values():
+        succeeded = 0
+        for picked in pool:
+            if succeeded >= max_per_carrier:
+                break
+            token = picked.get("p_token")
+            if not token or token in used:
+                continue
+            used.add(token)
+            host = picked.get("host", "")
+            group_title = normalize_group_title(picked.get("type", ""), province)
+            print(f"[*] [{province}] 尝试源 {succeeded + 1}/{max_per_carrier}: {host} / {group_title}")
+            try:
+                detail_html = fetch_detail_html(token)
+            except Exception as e:
+                print(f"[-] IP 详情获取失败: {e}，换下一条候选源")
+                continue
+            s_token = parse_s_token(detail_html or "")
+            if not s_token:
+                print(f"[-] 未找到频道列表 token: {host}，换下一条候选源")
+                continue
+            lines = fetch_channel_lines_by_s(s_token, max_pages=channel_max_pages)
+            if not lines:
+                print(f"[-] 频道列表为空: {host}，换下一条候选源")
+                continue
             group_to_sources.setdefault(group_title, []).append(lines)
+            succeeded += 1
 
     if not group_to_sources:
         return {}, "channel_lines_empty"
@@ -572,8 +581,8 @@ def write_outputs(
     txt_dir: str,
     m3u_dir: str,
     grouped_sources: dict[str, list[list[str]]],
-) -> str:
-    """写分文件 + 聚合/发布文件，清理旧产物；返回聚合 M3U 文本（只在抓取成功后调用）。"""
+) -> None:
+    """写分文件 + 固定聚合文件，清理旧产物（只在抓取成功后调用）。"""
     os.makedirs(txt_dir, exist_ok=True)
     os.makedirs(m3u_dir, exist_ok=True)
     expected: set[str] = set()
@@ -632,12 +641,8 @@ def write_outputs(
         f.write(m3u_content)
     with open(os.path.join(repo_root, AGGREGATE_TXT), "w", encoding="utf-8", newline="\n") as f:
         f.write(txt_content_all)
-    # 同一份内容写到本地 wyhiptv.m3u，作为跨仓库发布的源文件
-    with open(os.path.join(repo_root, PUBLISH_FILE), "w", encoding="utf-8", newline="\n") as f:
-        f.write(m3u_content)
-    print(f"[+] 聚合文件 {AGGREGATE_M3U} / {PUBLISH_FILE} 已生成：{len(items)} 条频道"
+    print(f"[+] 固定聚合订阅文件 {AGGREGATE_M3U} 已生成：{len(items)} 条频道"
           f"（剔除 {skipped} 条占位垃圾频道）。")
-    return m3u_content
 
 
 # ---------------- GitHub / README ----------------
@@ -683,7 +688,8 @@ def subscribe_urls(repo_root: str) -> dict[str, str]:
     owner_repo, branch = repo_info(repo_root)
     raw = f"{raw_base_url(repo_root)}/{AGGREGATE_M3U}"
     return {
-        "primary": SUBSCRIBE_URL,
+        "primary": (f"{SUBSCRIBE_PROXY_PREFIX}https://github.com/"
+                    f"{owner_repo}/blob/{branch}/{AGGREGATE_M3U}"),
         "raw": raw,
         "proxy": PROXY_PREFIX + raw,
         "jsdelivr": f"https://cdn.jsdelivr.net/gh/{owner_repo}@{branch}/{AGGREGATE_M3U}",
@@ -737,11 +743,11 @@ def _subscribe_block(repo_root: str) -> str:
     return (
         "<!-- SUBSCRIBE_START -->\n"
         "## 电视 App 订阅地址\n\n"
-        f"- **主地址（保持不变，推荐）**：`{urls['primary']}`\n"
-        f"- 备用（本仓库 {AGGREGATE_M3U} 加速）：`{urls['proxy']}`\n"
-        f"- 备用原始直链：`{urls['raw']}`\n\n"
-        f"脚本每次运行会把最新浙江频道通过 GitHub API 同步到 "
-        f"`{PUBLISH_REPO}` 仓库的 `{PUBLISH_FILE}`，所以主地址永远不用改。"
+        f"- **主地址（推荐）**：`{urls['primary']}`\n"
+        f"- 备用（gh-proxy.org raw 加速）：`{urls['proxy']}`\n"
+        f"- 备用原始直链：`{urls['raw']}`\n"
+        f"- 备用（jsDelivr CDN）：`{urls['jsdelivr']}`\n\n"
+        f"本仓库的 `{AGGREGATE_M3U}` 每次更新会被覆盖，地址固定不变，App 里填一次即可。"
         f"（最近更新：{updated_at}）\n"
         "<!-- SUBSCRIBE_END -->"
     )
@@ -837,140 +843,18 @@ def push_to_github(repo_root: str) -> bool:
         push_run = git_run(push_cmd, repo_root)
     if push_run.returncode != 0:
         print(f"[-] git push 失败:\n{push_run.stderr.strip()}")
-        print("    请确认本机 git 凭据（或 GitHub Token）可用；文件已在本地生成，可稍后手动推送。")
+        print("    请确认本机 git 凭据与网络代理正常；文件已在本地生成，可稍后手动推送。")
         return False
     print("[+] 已成功推送到 GitHub。")
     return True
 
 
-# ---------------- 跨仓库发布（电视 App 固定订阅地址） ----------------
-
-def load_publish_token(repo_root: str) -> str:
-    """Token 优先取环境变量，其次取项目根 .env（.env 已被 .gitignore 忽略）。"""
-    for key in TOKEN_ENV_KEYS:
-        value = (os.environ.get(key) or "").strip()
-        if value:
-            return value
-    env_path = os.path.join(repo_root, ".env")
-    if os.path.isfile(env_path):
-        with open(env_path, "r", encoding="utf-8", errors="ignore") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, value = line.split("=", 1)
-                if key.strip() in TOKEN_ENV_KEYS:
-                    value = value.strip().strip('"').strip("'")
-                    if value:
-                        return value
-    return ""
-
-
-def _normalize_m3u(text: str) -> str:
-    return "\n".join(text.replace("\r\n", "\n").splitlines()).strip()
-
-
-def _backup_remote_content(repo_root: str, remote_text: str) -> None:
-    """首次覆盖前留一份远端原文件，防误覆盖后找不回来。"""
-    backup_dir = os.path.join(repo_root, ".workbuddy", "backup")
-    backup_path = os.path.join(backup_dir, "wyhiptv-覆盖前备份.m3u")
-    if os.path.exists(backup_path):
-        return
-    os.makedirs(backup_dir, exist_ok=True)
-    with open(backup_path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(remote_text)
-    print(f"[+] 已备份远端原文件: {backup_path}")
-
-
-def publish_to_my_iptv(repo_root: str, m3u_content: str) -> bool:
-    """通过 GitHub Contents API 覆盖 my-iptv 仓库的 wyhiptv.m3u，订阅地址保持不变。"""
-    token = load_publish_token(repo_root)
-    if not token:
-        print("\n[!] 未配置 GitHub Token，my-iptv 未更新（电视订阅地址仍是旧内容）。")
-        print("    本地：在项目根目录 .env 写入  MY_IPTV_TOKEN=<PAT>")
-        print("    云端：在 4K-IPTV-M3U 仓库 Settings -> Secrets 添加 MY_IPTV_TOKEN")
-        print("    权限：PAT 需对 wyhcoool/my-iptv 有 Contents 读写权限")
-        return False
-
-    api = f"{GITHUB_API}/repos/{PUBLISH_REPO}/contents/{PUBLISH_FILE}"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "iptv-auto-update",
-    }
-    print(f"\n[*] 通过 GitHub API 更新固定订阅地址: {PUBLISH_REPO}/{PUBLISH_FILE}")
-
-    def _get_current():
-        try:
-            r = requests.get(api, params={"ref": PUBLISH_BRANCH}, headers=headers, timeout=30)
-        except requests.RequestException as e:
-            print(f"[-] 读取远端文件失败: {e}")
-            return None, None
-        if r.status_code == 200:
-            j = r.json()
-            try:
-                text = base64.b64decode(j.get("content", "")).decode("utf-8", "replace")
-            except Exception:
-                text = ""
-            return j.get("sha"), text
-        if r.status_code == 404:
-            return None, ""
-        print(f"[-] 读取远端文件失败: HTTP {r.status_code} {r.text[:160]}")
-        return None, None
-
-    sha, remote_text = _get_current()
-    if remote_text is None:
-        return False
-    if remote_text:
-        _backup_remote_content(repo_root, remote_text)
-        if _normalize_m3u(remote_text) == _normalize_m3u(m3u_content):
-            print("[*] 远端 wyhiptv.m3u 已是最新内容，跳过提交。")
-            return True
-
-    payload = {
-        "message": f"{GITHUB_COMMIT_PREFIX} 浙江组播源 "
-                   f"{beijing_now().strftime('%Y-%m-%d %H:%M:%S')}",
-        "content": base64.b64encode(m3u_content.encode("utf-8")).decode("ascii"),
-        "branch": PUBLISH_BRANCH,
-    }
-    if sha:
-        payload["sha"] = sha
-    try:
-        resp = requests.put(api, headers=headers, json=payload, timeout=45)
-    except requests.RequestException as e:
-        print(f"[-] 更新远端文件失败: {e}")
-        return False
-    if resp.status_code == 409:  # sha 冲突，重新取一次再试
-        sha, _ = _get_current()
-        if sha:
-            payload["sha"] = sha
-            try:
-                resp = requests.put(api, headers=headers, json=payload, timeout=45)
-            except requests.RequestException as e:
-                print(f"[-] 重试更新失败: {e}")
-                return False
-    if resp.status_code in (200, 201):
-        print(f"[+] 已更新 {PUBLISH_REPO}/{PUBLISH_FILE}，电视订阅地址内容同步完成。")
-        print(f"    订阅地址: {SUBSCRIBE_URL}")
-        return True
-    hint = ""
-    if resp.status_code in (401, 403):
-        hint = "（Token 无效或缺少 my-iptv 的 Contents 写权限）"
-    elif resp.status_code == 404:
-        hint = "（仓库/分支不存在，或 Token 看不到该仓库）"
-    print(f"[-] 更新失败: HTTP {resp.status_code} {resp.text[:200]} {hint}")
-    return False
-
-
 # ---------------- 命令行 ----------------
 
 def parse_args():
-    ap = argparse.ArgumentParser(description="抓取浙江组播源并同步到电视 App 固定订阅地址。")
-    ap.add_argument("--no-push", action="store_true", help="只生成本地文件，不执行 git 推送和 API 更新")
+    ap = argparse.ArgumentParser(description="抓取浙江组播源，生成固定订阅文件并推送到本仓库。")
+    ap.add_argument("--no-push", action="store_true", help="只生成本地文件，不执行 git 提交推送")
     ap.add_argument("--push", action="store_true", help="兼容旧用法；推送默认已开启")
-    ap.add_argument("--no-api-publish", action="store_true",
-                    help="跳过 my-iptv 跨仓库 API 更新，只推送本仓库")
     ap.add_argument("--dry-run", action="store_true", help="只抓取并统计，不写文件、不推送")
     ap.add_argument("--only-province", default="", help="只处理指定省份（默认只处理浙江）")
     ap.add_argument("--all-provinces", action="store_true", help="恢复全国抓取（请求量很大，不推荐）")
@@ -1036,35 +920,30 @@ def main() -> int:
           f"限流 {LIMITER.total_throttles} 次 | 耗时 {time.monotonic() - started:.1f}s")
 
     urls = subscribe_urls(repo_root)
-    print("\n[*] 电视 App 订阅地址（保持不变，内容自动更新）:")
+    print("\n[*] 电视 App 订阅地址（地址固定，文件自动覆盖）:")
     print(f"    主地址: {urls['primary']}")
     print(f"    备用:   {urls['proxy']}")
+    print(f"    直链:   {urls['raw']}")
 
     if args.dry_run:
         print("\n[*] dry-run 模式：未写入文件、未提交推送。")
         return 0
 
-    m3u_content = write_outputs(repo_root, txt_dir, m3u_dir, all_grouped)
+    write_outputs(repo_root, txt_dir, m3u_dir, all_grouped)
     update_readme_file_list(repo_root)
 
     if args.no_push:
-        print("\n[*] 已生成全部文件（--no-push，跳过 git 推送与 API 更新）。")
+        print("\n[*] 已生成全部文件（--no-push，跳过 git 推送）。")
         return 0
 
-    git_ok = push_to_github(repo_root)
-    if args.no_api_publish:
-        api_ok = True
-        print("[*] --no-api-publish：跳过 my-iptv 跨仓库更新。")
+    ok = push_to_github(repo_root)
+    if ok:
+        print(f"\n[+] 流水线完成，订阅地址内容已更新：\n    {urls['primary']}")
     else:
-        api_ok = publish_to_my_iptv(repo_root, m3u_content)
-
-    if git_ok and api_ok:
-        print(f"\n[+] 完成：订阅地址 {SUBSCRIBE_URL} 已同步为最新浙江源。")
-    else:
-        print("\n[!] 部分步骤未完成，详见上方提示："
-              f"本仓库推送={'成功' if git_ok else '失败'}，"
-              f"订阅地址更新={'成功' if api_ok else '失败'}。")
-    return 0 if (git_ok and api_ok) else 1
+        print("\n[!] 文件已在本地生成，但本次未推送到 GitHub（详见上方错误）。")
+        print("    线上订阅仍是上一版内容；云端 Actions 会在下次定时任务自动同步。")
+        print("    如需立即生效，可在网络恢复后执行：git push origin main")
+    return 0
 
 
 if __name__ == "__main__":

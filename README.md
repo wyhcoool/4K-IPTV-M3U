@@ -21,10 +21,10 @@
 ### 更新机制
 
 - 默认只抓取 **浙江**，每个运营商只取 1 条最新可用源，全局节流 + 限流自动降速，避免被源站拦截
-- 每次运行覆盖生成仓库根目录的 `zj.m3u` / `wyhiptv.m3u`（聚合文件），并同步更新 `m3u/`、`txt/` 分文件
+- 每次运行覆盖生成仓库根目录的 `zj.m3u` / `zj.txt`（固定聚合订阅文件），并同步更新 `m3u/`、`txt/` 分文件
 - 抓取失败时**保留原有文件**，不会清空订阅源
 - 同步自动重写 README 的订阅地址与文件列表（含“最近更新时间”）
-- **电视 App 固定订阅地址**：`https://gh-proxy.com/https://github.com/wyhcoool/my-iptv/blob/main/wyhiptv.m3u`。脚本用 GitHub Contents API 把同一份内容跨仓库覆盖到 `wyhcoool/my-iptv` 的 `wyhiptv.m3u`，地址永远不用改；需配置 `MY_IPTV_TOKEN`（本地写在项目根 `.env`，Actions 写在仓库 Secret；`.env` 已被忽略，Token 不会进仓库）
+- 只操作本仓库 `wyhcoool/4K-IPTV-M3U`：`git add / commit / push` 一条龙，**不需要任何 Token、不跨仓库**；电视 App 订阅地址指向本仓库的 `zj.m3u`，文件每次被覆盖，地址固定不变
 - 下载链接统一使用 `gh-proxy` 加速前缀
 - `.github/workflows/update-iptv.yml`：每两天（北京时间 09:00）云端自动运行并推送，也可在 Actions 页手动触发
 - 本机定时：双击 `run_update.bat` 一键更新；双击 `register_task.bat` 注册 Windows 计划任务（每两天 09:00）。**云端 Actions 与本机计划任务二选一即可，避免重复抓取**
@@ -42,11 +42,12 @@ python rtp/b.py --delay 4    # 被限流时调大请求间隔（秒）
 <!-- SUBSCRIBE_START -->
 ## 电视 App 订阅地址
 
-- **主地址（保持不变，推荐）**：`https://gh-proxy.com/https://github.com/wyhcoool/my-iptv/blob/main/wyhiptv.m3u`
-- 备用（本仓库 zj.m3u 加速）：`https://gh-proxy.org/https://raw.githubusercontent.com/wyhcoool/4K-IPTV-M3U/main/zj.m3u`
+- **主地址（推荐）**：`https://gh-proxy.com/https://github.com/wyhcoool/4K-IPTV-M3U/blob/main/zj.m3u`
+- 备用（gh-proxy.org raw 加速）：`https://gh-proxy.org/https://raw.githubusercontent.com/wyhcoool/4K-IPTV-M3U/main/zj.m3u`
 - 备用原始直链：`https://raw.githubusercontent.com/wyhcoool/4K-IPTV-M3U/main/zj.m3u`
+- 备用（jsDelivr CDN）：`https://cdn.jsdelivr.net/gh/wyhcoool/4K-IPTV-M3U@main/zj.m3u`
 
-脚本每次运行会把最新浙江频道通过 GitHub API 同步到 `wyhcoool/my-iptv` 仓库的 `wyhiptv.m3u`，所以主地址永远不用改。（最近更新：2026-11-08 20:37:48）
+本仓库的 `zj.m3u` 每次更新会被覆盖，地址固定不变，App 里填一次即可。（最近更新：2026-11-08 20:56:46）
 <!-- SUBSCRIBE_END -->
 
 ## 加速下载说明
@@ -74,7 +75,7 @@ GitHub README 不支持可执行脚本，`onclick` 复制按钮会失效，因�
 </tr>
 </thead>
 <tbody>
-<tr><td style="white-space:nowrap;">浙江电信.m3u</td><td style="white-space:nowrap;"><a href="https://gh-proxy.org/https://raw.githubusercontent.com/wyhcoool/4K-IPTV-M3U/main/m3u/%E6%B5%99%E6%B1%9F%E7%94%B5%E4%BF%A1.m3u">下载链接</a></td><td style="white-space:nowrap;">2026-11-08 20:37:48</td><td><code>https://gh-proxy.org/https://raw.githubusercontent.com/wyhcoool/4K-IPTV-M3U/main/m3u/%E6%B5%99%E6%B1%9F%E7%94%B5%E4%BF%A1.m3u</code></td></tr>
+<tr><td style="white-space:nowrap;">浙江电信.m3u</td><td style="white-space:nowrap;"><a href="https://gh-proxy.org/https://raw.githubusercontent.com/wyhcoool/4K-IPTV-M3U/main/m3u/%E6%B5%99%E6%B1%9F%E7%94%B5%E4%BF%A1.m3u">下载链接</a></td><td style="white-space:nowrap;">2026-11-08 20:56:46</td><td><code>https://gh-proxy.org/https://raw.githubusercontent.com/wyhcoool/4K-IPTV-M3U/main/m3u/%E6%B5%99%E6%B1%9F%E7%94%B5%E4%BF%A1.m3u</code></td></tr>
 </tbody>
 </table>
 ## TXT 文件列表
@@ -95,7 +96,7 @@ GitHub README 不支持可执行脚本，`onclick` 复制按钮会失效，因�
 </tr>
 </thead>
 <tbody>
-<tr><td style="white-space:nowrap;">浙江电信.txt</td><td style="white-space:nowrap;"><a href="https://gh-proxy.org/https://raw.githubusercontent.com/wyhcoool/4K-IPTV-M3U/main/txt/%E6%B5%99%E6%B1%9F%E7%94%B5%E4%BF%A1.txt">下载链接</a></td><td style="white-space:nowrap;">2026-11-08 20:37:48</td><td><code>https://gh-proxy.org/https://raw.githubusercontent.com/wyhcoool/4K-IPTV-M3U/main/txt/%E6%B5%99%E6%B1%9F%E7%94%B5%E4%BF%A1.txt</code></td></tr>
+<tr><td style="white-space:nowrap;">浙江电信.txt</td><td style="white-space:nowrap;"><a href="https://gh-proxy.org/https://raw.githubusercontent.com/wyhcoool/4K-IPTV-M3U/main/txt/%E6%B5%99%E6%B1%9F%E7%94%B5%E4%BF%A1.txt">下载链接</a></td><td style="white-space:nowrap;">2026-11-08 20:56:46</td><td><code>https://gh-proxy.org/https://raw.githubusercontent.com/wyhcoool/4K-IPTV-M3U/main/txt/%E6%B5%99%E6%B1%9F%E7%94%B5%E4%BF%A1.txt</code></td></tr>
 </tbody>
 </table>
 ---

@@ -31,10 +31,6 @@ jobs:
       - name: 安装依赖
         run: pip install -r requirements.txt
 
-      - name: 抓取并发布
-        env:
-          # 跨仓库更新 my-iptv 需要 PAT：
-          # Settings -> Secrets and variables -> Actions -> New repository secret -> MY_IPTV_TOKEN
-          MY_IPTV_TOKEN: ${{ secrets.MY_IPTV_TOKEN }}
-        # 脚本内部：本仓库 git add/commit/push + 通过 API 覆盖 my-iptv/wyhiptv.m3u
+      - name: 抓取并推送
+        # 脚本内部完成 git add / commit / push，只操作本仓库，无需任何 Secret / Token
         run: python rtp/b.py
