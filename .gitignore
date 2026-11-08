@@ -6,3 +6,7 @@ venv/
 .env
 node_modules/
 package-lock.json
+
+# 本地备份目录 + 发布源文件（由 API 同步到 my-iptv，不提交到本仓库）
+.workbuddy/
+wyhiptv.m3u
