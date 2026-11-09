@@ -47,7 +47,7 @@ python rtp/b.py --delay 4    # 被限流时调大请求间隔（秒）
 - 备用原始直链：`https://raw.githubusercontent.com/wyhcoool/4K-IPTV-M3U/main/zj.m3u`
 - 备用（jsDelivr CDN）：`https://cdn.jsdelivr.net/gh/wyhcoool/4K-IPTV-M3U@main/zj.m3u`
 
-本仓库的 `zj.m3u` 每次更新会被覆盖，地址固定不变，App 里填一次即可。（最近更新：2026-11-08 21:20:56）
+本仓库的 `zj.m3u` 每次更新会被覆盖，地址固定不变，App 里填一次即可。（最近更新：2026-11-09 15:28:41）
 <!-- SUBSCRIBE_END -->
 
 ## 加速下载说明
@@ -75,7 +75,7 @@ GitHub README 不支持可执行脚本，`onclick` 复制按钮会失效，因�
 </tr>
 </thead>
 <tbody>
-<tr><td style="white-space:nowrap;">浙江电信.m3u</td><td style="white-space:nowrap;"><a href="https://gh-proxy.org/https://raw.githubusercontent.com/wyhcoool/4K-IPTV-M3U/main/m3u/%E6%B5%99%E6%B1%9F%E7%94%B5%E4%BF%A1.m3u">下载链接</a></td><td style="white-space:nowrap;">2026-11-08 21:20:56</td><td><code>https://gh-proxy.org/https://raw.githubusercontent.com/wyhcoool/4K-IPTV-M3U/main/m3u/%E6%B5%99%E6%B1%9F%E7%94%B5%E4%BF%A1.m3u</code></td></tr>
+<tr><td style="white-space:nowrap;">浙江电信.m3u</td><td style="white-space:nowrap;"><a href="https://gh-proxy.org/https://raw.githubusercontent.com/wyhcoool/4K-IPTV-M3U/main/m3u/%E6%B5%99%E6%B1%9F%E7%94%B5%E4%BF%A1.m3u">下载链接</a></td><td style="white-space:nowrap;">2026-11-09 15:28:41</td><td><code>https://gh-proxy.org/https://raw.githubusercontent.com/wyhcoool/4K-IPTV-M3U/main/m3u/%E6%B5%99%E6%B1%9F%E7%94%B5%E4%BF%A1.m3u</code></td></tr>
 </tbody>
 </table>
 ## TXT 文件列表
@@ -96,7 +96,7 @@ GitHub README 不支持可执行脚本，`onclick` 复制按钮会失效，因�
 </tr>
 </thead>
 <tbody>
-<tr><td style="white-space:nowrap;">浙江电信.txt</td><td style="white-space:nowrap;"><a href="https://gh-proxy.org/https://raw.githubusercontent.com/wyhcoool/4K-IPTV-M3U/main/txt/%E6%B5%99%E6%B1%9F%E7%94%B5%E4%BF%A1.txt">下载链接</a></td><td style="white-space:nowrap;">2026-11-08 21:20:56</td><td><code>https://gh-proxy.org/https://raw.githubusercontent.com/wyhcoool/4K-IPTV-M3U/main/txt/%E6%B5%99%E6%B1%9F%E7%94%B5%E4%BF%A1.txt</code></td></tr>
+<tr><td style="white-space:nowrap;">浙江电信.txt</td><td style="white-space:nowrap;"><a href="https://gh-proxy.org/https://raw.githubusercontent.com/wyhcoool/4K-IPTV-M3U/main/txt/%E6%B5%99%E6%B1%9F%E7%94%B5%E4%BF%A1.txt">下载链接</a></td><td style="white-space:nowrap;">2026-11-09 15:28:41</td><td><code>https://gh-proxy.org/https://raw.githubusercontent.com/wyhcoool/4K-IPTV-M3U/main/txt/%E6%B5%99%E6%B1%9F%E7%94%B5%E4%BF%A1.txt</code></td></tr>
 </tbody>
 </table>
 ---
